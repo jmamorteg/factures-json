@@ -1,0 +1,18 @@
+{
+  "name": "Factures JSON",
+  "short_name": "Factures",
+  "description": "Registre local de factures amb exportació JSON i OCR al navegador.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f3f0e8",
+  "theme_color": "#17211b",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
