@@ -1,315 +1,239 @@
 [CmdletBinding()]
 param(
-    [Parameter(Position = 0)] [string]$JsonPath,
-    [Parameter(Position = 1)] [string]$WorkbookPath,
-    [string]$WorksheetName = "Entrada_Factures",
-    [string]$TableName = "tblEntradaFactures",
+    [Parameter(Position=0)][string]$JsonPath,
+    [Parameter(Position=1)][string]$WorkbookPath,
+    [string]$WorksheetName="Entrada_Factures",
+    [string]$TableName="tblEntradaFactures",
     [switch]$NoBackup,
     [switch]$DryRun
 )
 
 Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
-$exitCode = 0
-$excel = $null
-$workbook = $null
-$worksheet = $null
-$table = $null
+$ErrorActionPreference="Stop"
+$excel=$null; $book=$null; $sheet=$null; $table=$null; $exitCode=0
 
-function Pick-File {
-    param([string]$Title, [string]$Filter)
+function Release-Com($o) {
+    if ($null -ne $o) {
+        try { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($o) } catch {}
+    }
+}
+
+function Pick-File([string]$title,[string]$filter) {
     Add-Type -AssemblyName System.Windows.Forms
-    $dialog = New-Object System.Windows.Forms.OpenFileDialog
-    $dialog.Title = $Title
-    $dialog.Filter = $Filter
-    $dialog.CheckFileExists = $true
+    $d=New-Object System.Windows.Forms.OpenFileDialog
+    $d.Title=$title; $d.Filter=$filter; $d.CheckFileExists=$true
     try {
-        if ($dialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) {
+        if ($d.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) {
             throw "Operacio cancel-lada."
         }
-        return $dialog.FileName
-    }
-    finally { $dialog.Dispose() }
+        return $d.FileName
+    } finally { $d.Dispose() }
 }
 
-function Release-Com {
-    param($Object)
-    if ($null -ne $Object) {
-        try { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($Object) } catch { }
+function Col($table,[string[]]$names,[switch]$optional) {
+    foreach($name in $names) {
+        $c=$null
+        try { $c=$table.ListColumns.Item($name); return [int]$c.Index }
+        catch {}
+        finally { Release-Com $c }
     }
+    if($optional){ return $null }
+    throw "Falta una columna obligatoria: $($names -join ' / ')"
 }
 
-function Get-ColumnIndex {
-    param($Table, [string[]]$Names, [switch]$Optional)
-    foreach ($name in $Names) {
-        $column = $null
-        try {
-            $column = $Table.ListColumns.Item($name)
-            return [int]$column.Index
-        }
-        catch { }
-        finally { Release-Com $column }
-    }
-    if ($Optional) { return $null }
-    throw "Falta una columna obligatoria: $($Names -join ' / ')"
+function Prop($object,[string]$name) {
+    $p=$object.PSObject.Properties[$name]
+    if($null -eq $p){ return $null }
+    return $p.Value
 }
 
-function To-Number {
-    param($Value)
-    if ($null -eq $Value -or [string]::IsNullOrWhiteSpace([string]$Value)) { return $null }
-    if ($Value -is [ValueType]) { return [double]$Value }
-
-    $text = ([string]$Value).Trim()
-    $number = 0.0
-    if ([double]::TryParse($text, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$number)) {
-        return $number
-    }
-    if ([double]::TryParse($text, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::CurrentCulture, [ref]$number)) {
-        return $number
-    }
-    throw "Valor numeric no valid: $Value"
+function Num($value) {
+    if($null -eq $value -or [string]::IsNullOrWhiteSpace(([string]$value))){ return $null }
+    if($value -is [ValueType]){ return [double]$value }
+    $n=0.0; $s=([string]$value).Trim()
+    if([double]::TryParse($s,[Globalization.NumberStyles]::Float,[Globalization.CultureInfo]::InvariantCulture,[ref]$n)){ return $n }
+    if([double]::TryParse($s,[Globalization.NumberStyles]::Float,[Globalization.CultureInfo]::CurrentCulture,[ref]$n)){ return $n }
+    throw "Valor numeric no valid: $value"
 }
 
-function To-IsoDate {
-    param($Value)
-    if ($Value -is [DateTime]) { return $Value.ToString("yyyy-MM-dd") }
-    if ($Value -is [ValueType]) { return [DateTime]::FromOADate([double]$Value).ToString("yyyy-MM-dd") }
-
-    $text = ([string]$Value).Trim()
-    $date = [DateTime]::MinValue
-    if ([DateTime]::TryParseExact($text, "yyyy-MM-dd", [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$date)) {
-        return $date.ToString("yyyy-MM-dd")
-    }
-    if ([DateTime]::TryParse($text, [Globalization.CultureInfo]::CurrentCulture, [Globalization.DateTimeStyles]::None, [ref]$date)) {
-        return $date.ToString("yyyy-MM-dd")
-    }
-    throw "Data no valida: $Value"
+function Iso-Date($value) {
+    if($value -is [DateTime]){ return $value.ToString("yyyy-MM-dd") }
+    if($value -is [ValueType]){ return [DateTime]::FromOADate([double]$value).ToString("yyyy-MM-dd") }
+    $d=[DateTime]::MinValue; $s=([string]$value).Trim()
+    if([DateTime]::TryParseExact($s,"yyyy-MM-dd",[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::None,[ref]$d)){ return $d.ToString("yyyy-MM-dd") }
+    if([DateTime]::TryParse($s,[Globalization.CultureInfo]::CurrentCulture,[Globalization.DateTimeStyles]::None,[ref]$d)){ return $d.ToString("yyyy-MM-dd") }
+    throw "Data no valida: $value"
 }
 
-function Normalize-Key {
-    param($Value)
-    if ($null -eq $Value) { return "" }
-    return (([string]$Value).Trim().ToUpperInvariant() -replace '\s+', '')
+function Norm($value) {
+    if($null -eq $value){ return "" }
+    return (([string]$value).Trim().ToUpperInvariant() -replace '\s+','')
 }
 
-function Invoice-Key {
-    param($Tipus, $NomAlias, $NumFactura, $Data, $Bi)
-    $amount = (To-Number $Bi).ToString("0.#####", [Globalization.CultureInfo]::InvariantCulture)
-    return @(
-        (Normalize-Key $Tipus),
-        (Normalize-Key $NomAlias),
-        (Normalize-Key $NumFactura),
-        (To-IsoDate $Data),
-        $amount
-    ) -join "|"
+function Invoice-Key($type,$alias,$number,$date,$bi) {
+    $amount=(Num $bi).ToString("0.#####",[Globalization.CultureInfo]::InvariantCulture)
+    return "$(Norm $type)|$(Norm $alias)|$(Norm $number)|$(Iso-Date $date)|$amount"
 }
 
-function Set-Text {
-    param($Row, [int]$Column, $Value)
-    if ($Column -le 0) { return }
-    $cell = $Row.Cells.Item(1, $Column)
+function Set-Text($row,[int]$column,$value) {
+    if($column -le 0){ return }
+    $cell=$null
     try {
-        $cell.NumberFormat = "@"
-        $cell.Value2 = if ($null -eq $Value) { "" } else { [string]$Value }
-    }
+        $cell=$row.Cells.Item(1,$column)
+        $text=if($null -eq $value){""}else{[string]$value}
+        $cell.NumberFormat="@"
+        $cell.Value2=$text
+    } finally { Release-Com $cell }
+}
+
+function Set-Value($row,[int]$column,$value) {
+    if($column -le 0){ return }
+    $cell=$null
+    try { $cell=$row.Cells.Item(1,$column); $cell.Value2=$value }
     finally { Release-Com $cell }
 }
 
-function Set-Value {
-    param($Row, [int]$Column, $Value)
-    if ($Column -le 0) { return }
-    $cell = $Row.Cells.Item(1, $Column)
-    try { $cell.Value2 = $Value }
-    finally { Release-Com $cell }
-}
-
-function Copy-PreviousRowTemplate {
-    param($Table, $NewRow)
-    if ($Table.ListRows.Count -le 1) { return }
-
-    $previous = $null
-    try {
-        $previous = $Table.ListRows.Item($Table.ListRows.Count - 1).Range
-        $previous.Copy()
-        $NewRow.PasteSpecial(-4122) | Out-Null # formats
-        $NewRow.PasteSpecial(6) | Out-Null     # validation
-
-        for ($i = 1; $i -le $Table.ListColumns.Count; $i++) {
-            $source = $null
-            $target = $null
-            try {
-                $source = $previous.Cells.Item(1, $i)
-                $target = $NewRow.Cells.Item(1, $i)
-                if ($source.HasFormula) {
-                    try { $target.Formula2R1C1 = $source.Formula2R1C1 }
-                    catch { $target.FormulaR1C1 = $source.FormulaR1C1 }
-                }
-            }
-            finally {
-                Release-Com $target
-                Release-Com $source
-            }
-        }
-    }
-    finally { Release-Com $previous }
-}
-
-function Build-Notes {
-    param($Invoice, [bool]$IncludeNif)
-    $parts = @()
-    if (-not [string]::IsNullOrWhiteSpace([string]$Invoice.descripcio)) {
-        $parts += "Descripcio: $(([string]$Invoice.descripcio).Trim())"
-    }
-    if ($IncludeNif -and -not [string]::IsNullOrWhiteSpace([string]$Invoice.nif)) {
-        $parts += "NIF JSON: $(([string]$Invoice.nif).Trim().ToUpperInvariant())"
-    }
-    if (-not [string]::IsNullOrWhiteSpace([string]$Invoice.observacions)) {
-        $parts += ([string]$Invoice.observacions).Trim()
-    }
-    return ($parts -join " | ")
+function Notes($invoice,[bool]$includeNif) {
+    $parts=@()
+    $description=Prop $invoice "descripcio"
+    $nif=Prop $invoice "nif"
+    $observations=Prop $invoice "observacions"
+    if(-not [string]::IsNullOrWhiteSpace(([string]$description))){ $parts+="Descripcio: $(([string]$description).Trim())" }
+    if($includeNif -and -not [string]::IsNullOrWhiteSpace(([string]$nif))){ $parts+="NIF JSON: $(([string]$nif).Trim().ToUpperInvariant())" }
+    if(-not [string]::IsNullOrWhiteSpace(([string]$observations))){ $parts+=([string]$observations).Trim() }
+    return $parts -join " | "
 }
 
 try {
-    if ([string]::IsNullOrWhiteSpace($JsonPath)) {
-        $JsonPath = Pick-File "Selecciona el JSON de Factures JSON" "Fitxers JSON (*.json)|*.json"
+    if([string]::IsNullOrWhiteSpace($JsonPath)){
+        $JsonPath=Pick-File "Selecciona el JSON de Factures JSON" "Fitxers JSON (*.json)|*.json"
     }
-    if ([string]::IsNullOrWhiteSpace($WorkbookPath)) {
-        $WorkbookPath = Pick-File "Selecciona el llibre de control fiscal" "Llibres Excel (*.xlsx;*.xlsm)|*.xlsx;*.xlsm"
+    if([string]::IsNullOrWhiteSpace($WorkbookPath)){
+        $WorkbookPath=Pick-File "Selecciona el llibre de control fiscal" "Llibres Excel (*.xlsx;*.xlsm)|*.xlsx;*.xlsm"
     }
 
-    $JsonPath = (Resolve-Path -LiteralPath $JsonPath).Path
-    $WorkbookPath = (Resolve-Path -LiteralPath $WorkbookPath).Path
+    $JsonPath=(Resolve-Path -LiteralPath $JsonPath).Path
+    $WorkbookPath=(Resolve-Path -LiteralPath $WorkbookPath).Path
+    $payload=Get-Content -LiteralPath $JsonPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if([int]$payload.schema_version -ne 1){ throw "schema_version no compatible." }
+    $invoices=@($payload.factures)
+    if($invoices.Count -eq 0){ throw "El JSON no conte factures." }
 
-    $payload = Get-Content -LiteralPath $JsonPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ([int]$payload.schema_version -ne 1) { throw "schema_version no compatible." }
-    $invoices = @($payload.factures)
-    if ($invoices.Count -eq 0) { throw "El JSON no conte factures." }
-
-    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-    if (-not $NoBackup -and -not $DryRun) {
-        $folder = Split-Path -Parent $WorkbookPath
-        $name = [IO.Path]::GetFileNameWithoutExtension($WorkbookPath)
-        $extension = [IO.Path]::GetExtension($WorkbookPath)
-        $backup = Join-Path $folder "$name.backup_$timestamp$extension"
+    $stamp=Get-Date -Format "yyyyMMdd_HHmmss"
+    if(-not $NoBackup -and -not $DryRun){
+        $folder=Split-Path -Parent $WorkbookPath
+        $name=[IO.Path]::GetFileNameWithoutExtension($WorkbookPath)
+        $extension=[IO.Path]::GetExtension($WorkbookPath)
+        $backup=Join-Path $folder "$name.backup_$stamp$extension"
         Copy-Item -LiteralPath $WorkbookPath -Destination $backup -Force
         Write-Host "Copia de seguretat: $backup" -ForegroundColor DarkGray
     }
 
-    $excel = New-Object -ComObject Excel.Application
-    $excel.Visible = $false
-    $excel.DisplayAlerts = $false
-    $excel.ScreenUpdating = $false
-    $excel.EnableEvents = $false
+    $excel=New-Object -ComObject Excel.Application
+    $excel.Visible=$false; $excel.DisplayAlerts=$false
+    $excel.ScreenUpdating=$false; $excel.EnableEvents=$false
+    $book=$excel.Workbooks.Open($WorkbookPath,0,$false)
+    if($book.ReadOnly){ throw "El llibre esta obert o bloquejat en mode nomes lectura." }
+    $sheet=$book.Worksheets.Item($WorksheetName)
+    $table=$sheet.ListObjects.Item($TableName)
 
-    $workbook = $excel.Workbooks.Open($WorkbookPath, 0, $false)
-    if ($workbook.ReadOnly) { throw "El llibre esta obert o bloquejat en mode nomes lectura." }
-    $worksheet = $workbook.Worksheets.Item($WorksheetName)
-    $table = $worksheet.ListObjects.Item($TableName)
-
-    $columns = @{
-        EstatFiscal     = (Get-ColumnIndex $table @("Estat_Fiscal", "Incloure"))
-        Tipus           = (Get-ColumnIndex $table @("Tipus"))
-        Data            = (Get-ColumnIndex $table @("Data"))
-        NumFactura      = (Get-ColumnIndex $table @("Num_Factura"))
-        NomAlias        = (Get-ColumnIndex $table @("Nom_Alias"))
-        NifInput        = (Get-ColumnIndex $table @("NIF_Entrada", "NIF_JSON", "NIF_Manual") -Optional)
-        IvaPct          = (Get-ColumnIndex $table @("%IVA"))
-        Bi              = (Get-ColumnIndex $table @("BI"))
-        IrpfReper       = (Get-ColumnIndex $table @("%IRPF/%Reper", "%IRPF", "%Reper"))
-        Observacions    = (Get-ColumnIndex $table @("Observacions"))
-        PeriodeDeclarat = (Get-ColumnIndex $table @("Periode_Declarat") -Optional)
-        Origen          = (Get-ColumnIndex $table @("Origen"))
-        IdExtern        = (Get-ColumnIndex $table @("ID_Extern"))
+    $cols=@{
+        State=Col $table @("Estat_Fiscal","Incloure")
+        Type=Col $table @("Tipus")
+        Date=Col $table @("Data")
+        Number=Col $table @("Num_Factura")
+        Alias=Col $table @("Nom_Alias")
+        Nif=Col $table @("NIF_Entrada","NIF_JSON","NIF_Manual") -optional
+        Vat=Col $table @("%IVA")
+        Base=Col $table @("BI")
+        Irpf=Col $table @("%IRPF/%Reper","%IRPF","%Reper")
+        Notes=Col $table @("Observacions")
+        Period=Col $table @("Periode_Declarat") -optional
+        Origin=Col $table @("Origen")
+        Id=Col $table @("ID_Extern")
     }
 
-    $existingIds = @{}
-    $existingInvoices = @{}
-    $dataRange = $table.DataBodyRange
-    if ($null -ne $dataRange) {
+    $ids=@{}; $keys=@{}
+    $range=$table.DataBodyRange
+    if($null -ne $range){
         try {
-            for ($r = 1; $r -le $dataRange.Rows.Count; $r++) {
-                $id = [string]$dataRange.Cells.Item($r, $columns.IdExtern).Value2
-                if (-not [string]::IsNullOrWhiteSpace($id)) { $existingIds[$id.Trim()] = $true }
+            for($r=1;$r -le $range.Rows.Count;$r++){
+                $idValue=$range.Cells.Item($r,$cols.Id).Value2
+                $id=if($null -eq $idValue){""}else{[string]$idValue}
+                if(-not [string]::IsNullOrWhiteSpace($id)){ $ids[$id.Trim()]=$true }
 
-                $tipus = $dataRange.Cells.Item($r, $columns.Tipus).Value2
-                $alias = $dataRange.Cells.Item($r, $columns.NomAlias).Value2
-                $number = $dataRange.Cells.Item($r, $columns.NumFactura).Value2
-                $date = $dataRange.Cells.Item($r, $columns.Data).Value2
-                $bi = $dataRange.Cells.Item($r, $columns.Bi).Value2
-                if ($null -ne $date -and $null -ne $bi -and -not [string]::IsNullOrWhiteSpace([string]$number)) {
-                    try { $existingInvoices[(Invoice-Key $tipus $alias $number $date $bi)] = $true } catch { }
+                $type=$range.Cells.Item($r,$cols.Type).Value2
+                $alias=$range.Cells.Item($r,$cols.Alias).Value2
+                $number=$range.Cells.Item($r,$cols.Number).Value2
+                $date=$range.Cells.Item($r,$cols.Date).Value2
+                $bi=$range.Cells.Item($r,$cols.Base).Value2
+                if($null -ne $date -and $null -ne $bi -and -not [string]::IsNullOrWhiteSpace(([string]$number))){
+                    try { $keys[(Invoice-Key $type $alias $number $date $bi)]=$true } catch {}
                 }
             }
-        }
-        finally { Release-Com $dataRange }
+        } finally { Release-Com $range }
     }
 
-    $imported = @()
-    $duplicatesById = @()
-    $duplicatesByData = @()
-
-    foreach ($invoice in $invoices) {
-        foreach ($required in @("id_extern", "tipus", "data", "num_factura", "nom_alias", "bi")) {
-            if ($null -eq $invoice.$required -or [string]::IsNullOrWhiteSpace([string]$invoice.$required)) {
+    $imported=@(); $duplicateIds=@(); $duplicateData=@()
+    foreach($invoice in $invoices){
+        foreach($required in @("id_extern","tipus","data","num_factura","nom_alias","bi")){
+            $value=Prop $invoice $required
+            if($null -eq $value -or [string]::IsNullOrWhiteSpace(([string]$value)){
                 throw "Factura no valida: falta $required."
             }
         }
 
-        $type = ([string]$invoice.tipus).Trim()
-        if ($type -notin @("Emesa", "Rebuda")) { throw "Tipus no valid: $type" }
-        $id = ([string]$invoice.id_extern).Trim()
-        $key = Invoice-Key $type $invoice.nom_alias $invoice.num_factura $invoice.data $invoice.bi
+        $type=([string](Prop $invoice "tipus")).Trim()
+        if($type -notin @("Emesa","Rebuda")){ throw "Tipus no valid: $type" }
+        $id=([string](Prop $invoice "id_extern")).Trim()
+        $key=Invoice-Key $type (Prop $invoice "nom_alias") (Prop $invoice "num_factura") (Prop $invoice "data") (Prop $invoice "bi")
 
-        if ($existingIds.ContainsKey($id)) {
-            $duplicatesById += [string]$invoice.num_factura
-            continue
-        }
-        if ($existingInvoices.ContainsKey($key)) {
-            $duplicatesByData += [string]$invoice.num_factura
-            continue
-        }
+        if($ids.ContainsKey($id)){ $duplicateIds+=[string](Prop $invoice "num_factura"); continue }
+        if($keys.ContainsKey($key)){ $duplicateData+=[string](Prop $invoice "num_factura"); continue }
 
-        if (-not $DryRun) {
-            $listRow = $null
-            $newRow = $null
+        if(-not $DryRun){
+            $listRow=$null; $row=$null
             try {
-                $listRow = $table.ListRows.Add()
-                $newRow = $listRow.Range
-                Copy-PreviousRowTemplate $table $newRow
+                # ListRows.Add already propagates calculated-column formulas,
+                # formats and validation in a normal Excel table.
+                $listRow=$table.ListRows.Add()
+                $row=$listRow.Range
 
-                Set-Text $newRow $columns.EstatFiscal "Pendent"
-                Set-Text $newRow $columns.Tipus $type
-                Set-Value $newRow $columns.Data ([DateTime]::ParseExact((To-IsoDate $invoice.data), "yyyy-MM-dd", [Globalization.CultureInfo]::InvariantCulture).ToOADate())
-                Set-Text $newRow $columns.NumFactura ([string]$invoice.num_factura).Trim()
-                Set-Text $newRow $columns.NomAlias ([string]$invoice.nom_alias).Trim()
-                if ($null -ne $columns.NifInput) { Set-Text $newRow $columns.NifInput ([string]$invoice.nif).Trim().ToUpperInvariant() }
-                Set-Value $newRow $columns.IvaPct (To-Number $invoice.iva_pct)
-                Set-Value $newRow $columns.Bi (To-Number $invoice.bi)
+                Set-Text $row $cols.State "Pendent"
+                Set-Text $row $cols.Type $type
+                $date=[DateTime]::ParseExact((Iso-Date (Prop $invoice "data")),"yyyy-MM-dd",[Globalization.CultureInfo]::InvariantCulture)
+                Set-Value $row $cols.Date $date.ToOADate()
+                Set-Text $row $cols.Number ([string](Prop $invoice "num_factura")).Trim()
+                Set-Text $row $cols.Alias ([string](Prop $invoice "nom_alias")).Trim()
 
-                $percentage = if ($type -eq "Emesa") { To-Number $invoice.irpf_pct } else { To-Number $invoice.afectacio_pct }
-                Set-Value $newRow $columns.IrpfReper $percentage
-                Set-Text $newRow $columns.Observacions (Build-Notes $invoice ($null -eq $columns.NifInput))
-                if ($null -ne $columns.PeriodeDeclarat) { Set-Text $newRow $columns.PeriodeDeclarat "" }
-                Set-Text $newRow $columns.Origen "JSON"
-                Set-Text $newRow $columns.IdExtern $id
-            }
-            finally {
-                Release-Com $newRow
+                if($null -ne $cols.Nif){
+                    Set-Text $row $cols.Nif ([string](Prop $invoice "nif")).Trim().ToUpperInvariant()
+                }
+
+                Set-Value $row $cols.Vat (Num (Prop $invoice "iva_pct"))
+                Set-Value $row $cols.Base (Num (Prop $invoice "bi"))
+                $percentage=if($type -eq "Emesa"){ Num (Prop $invoice "irpf_pct") }else{ Num (Prop $invoice "afectacio_pct") }
+                Set-Value $row $cols.Irpf $percentage
+                Set-Text $row $cols.Notes (Notes $invoice ($null -eq $cols.Nif))
+                if($null -ne $cols.Period){ Set-Text $row $cols.Period "" }
+                Set-Text $row $cols.Origin "JSON"
+                Set-Text $row $cols.Id $id
+            } finally {
+                Release-Com $row
                 Release-Com $listRow
             }
         }
 
-        $existingIds[$id] = $true
-        $existingInvoices[$key] = $true
-        $imported += "$type - $($invoice.num_factura) - $($invoice.nom_alias)"
+        $ids[$id]=$true; $keys[$key]=$true
+        $imported+="$type - $([string](Prop $invoice 'num_factura')) - $([string](Prop $invoice 'nom_alias'))"
     }
 
-    if (-not $DryRun -and $imported.Count -gt 0) {
+    if(-not $DryRun -and $imported.Count -gt 0){
         $excel.CalculateFull()
-        $workbook.Save()
+        $book.Save()
     }
 
-    $logPath = Join-Path (Split-Path -Parent $JsonPath) ("{0}.import_{1}.log" -f [IO.Path]::GetFileNameWithoutExtension($JsonPath), $timestamp)
+    $log=Join-Path (Split-Path -Parent $JsonPath) ("{0}.import_{1}.log" -f [IO.Path]::GetFileNameWithoutExtension($JsonPath),$stamp)
     @(
         "Factures JSON -> Excel",
         "Data: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')",
@@ -318,37 +242,41 @@ try {
         "Mode prova: $DryRun",
         "",
         "Importades: $($imported.Count)",
-        ($imported | ForEach-Object { "  + $_" }),
+        ($imported | ForEach-Object{"  + $_"}),
         "",
-        "Duplicades per ID: $($duplicatesById.Count)",
-        ($duplicatesById | ForEach-Object { "  = $_" }),
+        "Duplicades per ID: $($duplicateIds.Count)",
+        ($duplicateIds | ForEach-Object{"  = $_"}),
         "",
-        "Duplicades per dades: $($duplicatesByData.Count)",
-        ($duplicatesByData | ForEach-Object { "  ~ $_" })
-    ) | Set-Content -LiteralPath $logPath -Encoding UTF8
+        "Duplicades per dades: $($duplicateData.Count)",
+        ($duplicateData | ForEach-Object{"  ~ $_"})
+    ) | Set-Content -LiteralPath $log -Encoding UTF8
 
     Write-Host ""
     Write-Host "Importacio completada" -ForegroundColor Green
     Write-Host "  Importades: $($imported.Count)"
-    Write-Host "  Duplicades per ID: $($duplicatesById.Count)"
-    Write-Host "  Duplicades per dades: $($duplicatesByData.Count)"
-    Write-Host "  Registre: $logPath" -ForegroundColor DarkGray
-    if ($DryRun) { Write-Host "Mode prova: no s'ha modificat el llibre." -ForegroundColor Yellow }
+    Write-Host "  Duplicades per ID: $($duplicateIds.Count)"
+    Write-Host "  Duplicades per dades: $($duplicateData.Count)"
+    Write-Host "  Registre: $log" -ForegroundColor DarkGray
+    if($DryRun){ Write-Host "Mode prova: no s'ha modificat el llibre." -ForegroundColor Yellow }
 }
 catch {
-    $exitCode = 1
+    $exitCode=1
     Write-Host ""
     Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "Tipus: $($_.Exception.GetType().FullName)" -ForegroundColor DarkGray
+    Write-Host "Linia: $($_.InvocationInfo.ScriptLineNumber)" -ForegroundColor DarkGray
+    if(-not [string]::IsNullOrWhiteSpace($_.InvocationInfo.Line)){
+        Write-Host "Ordre: $($_.InvocationInfo.Line.Trim())" -ForegroundColor DarkGray
+    }
+    if(-not [string]::IsNullOrWhiteSpace($_.ScriptStackTrace)){
+        Write-Host $_.ScriptStackTrace -ForegroundColor DarkGray
+    }
 }
 finally {
-    if ($null -ne $workbook) { try { $workbook.Close($false) } catch { } }
-    if ($null -ne $excel) { try { $excel.Quit() } catch { } }
-    Release-Com $table
-    Release-Com $worksheet
-    Release-Com $workbook
-    Release-Com $excel
-    [GC]::Collect()
-    [GC]::WaitForPendingFinalizers()
+    if($null -ne $book){ try{$book.Close($false)}catch{} }
+    if($null -ne $excel){ try{$excel.Quit()}catch{} }
+    Release-Com $table; Release-Com $sheet; Release-Com $book; Release-Com $excel
+    [GC]::Collect(); [GC]::WaitForPendingFinalizers()
 }
 
 exit $exitCode
