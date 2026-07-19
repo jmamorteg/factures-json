@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="ca">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#17211b">
+  <meta name="description" content="Registre local de factures amb exportació JSON i OCR al navegador.">
+  <title>Factures JSON</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@7/dist/tesseract.min.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <div>
+      <p class="eyebrow">Registre local · sense servidor</p>
+      <h1>Factures JSON</h1>
+      <p class="subtitle">Anota, revisa i exporta. L’Excel ja farà la seva litúrgia.</p>
+    </div>
+    <button id="installButton" class="button secondary" hidden>Instal·lar</button>
+  </header>
+
+  <main>
+    <section class="panel" aria-labelledby="ocr-title">
+      <div class="section-heading">
+        <div>
+          <p class="step">Opcional</p>
+          <h2 id="ocr-title">Llegir una factura</h2>
+        </div>
+        <span class="badge">OCR local</span>
+      </div>
+      <p class="help">Tria una foto o captura. La imatge es processa al dispositiu; els camps suggerits sempre s’han de revisar.</p>
+      <div class="ocr-controls">
+        <label class="file-button">
+          <span>Foto o captura</span>
+          <input id="invoiceImage" type="file" accept="image/*" capture="environment">
+        </label>
+        <button id="scanButton" class="button" type="button" disabled>Reconèixer camps</button>
+        <button id="clearImageButton" class="button ghost" type="button" hidden>Treure imatge</button>
+      </div>
+      <img id="imagePreview" class="image-preview" alt="Previsualització de la factura" hidden>
+      <div id="ocrStatus" class="status" role="status" aria-live="polite"></div>
+      <details id="ocrDetails" hidden>
+        <summary>Text reconegut</summary>
+        <pre id="ocrText"></pre>
+      </details>
+    </section>
+
+    <section class="panel" aria-labelledby="form-title">
+      <div class="section-heading">
+        <div>
+          <p class="step">Registre</p>
+          <h2 id="form-title">Factura</h2>
+        </div>
+        <button id="resetFormButton" class="button ghost" type="button">Netejar</button>
+      </div>
+
+      <form id="invoiceForm" novalidate>
+        <input id="editingId" type="hidden">
+
+        <fieldset class="type-switch">
+          <legend>Tipus</legend>
+          <label><input type="radio" name="tipus" value="Emesa" checked><span>Emesa</span></label>
+          <label><input type="radio" name="tipus" value="Rebuda"><span>Rebuda</span></label>
+        </fieldset>
+
+        <div class="form-grid">
+          <label>
+            <span>Data *</span>
+            <input id="data" name="data" type="date" required>
+          </label>
+          <label>
+            <span>Número de factura *</span>
+            <input id="numFactura" name="num_factura" type="text" autocomplete="off" required>
+          </label>
+          <label class="wide">
+            <span id="partyLabel">Client *</span>
+            <input id="nomAlias" name="nom_alias" type="text" autocomplete="organization" required>
+          </label>
+          <label>
+            <span>NIF / CIF</span>
+            <input id="nif" name="nif" type="text" autocapitalize="characters" autocomplete="off">
+          </label>
+          <label>
+            <span>Base imposable *</span>
+            <input id="bi" name="bi" type="number" inputmode="decimal" min="0" step="0.01" required>
+          </label>
+          <label>
+            <span>IVA</span>
+            <select id="ivaPct" name="iva_pct">
+              <option value="0.21">21 %</option>
+              <option value="0.10">10 %</option>
+              <option value="0.04">4 %</option>
+              <option value="0">0 %</option>
+            </select>
+          </label>
+          <label id="irpfField">
+            <span>IRPF</span>
+            <select id="irpfPct" name="irpf_pct">
+              <option value="0.15">15 %</option>
+              <option value="0.07">7 %</option>
+              <option value="0">0 %</option>
+            </select>
+          </label>
+          <label id="afectacioField" hidden>
+            <span>Afectació deduïble</span>
+            <select id="afectacioPct" name="afectacio_pct">
+              <option value="1">100 %</option>
+              <option value="0.5">50 %</option>
+              <option value="0">0 %</option>
+            </select>
+          </label>
+          <label class="wide">
+            <span>Descripció</span>
+            <input id="descripcio" name="descripcio" type="text" autocomplete="off">
+          </label>
+          <label class="wide">
+            <span>Observacions</span>
+            <textarea id="observacions" name="observacions" rows="3"></textarea>
+          </label>
+        </div>
+
+        <div id="formMessage" class="status error" role="alert" hidden></div>
+        <button class="button primary full" type="submit">Guardar factura</button>
+      </form>
+    </section>
+
+    <section class="panel" aria-labelledby="saved-title">
+      <div class="section-heading">
+        <div>
+          <p class="step">Pendents d’exportar</p>
+          <h2 id="saved-title">Factures guardades <span id="invoiceCount">0</span></h2>
+        </div>
+      </div>
+      <div id="emptyState" class="empty-state">Encara no hi ha factures guardades.</div>
+      <div id="invoiceList" class="invoice-list"></div>
+      <div class="export-actions">
+        <button id="exportButton" class="button primary" type="button" disabled>Exportar JSON</button>
+        <label class="file-button secondary-file">
+          <span>Importar còpia JSON</span>
+          <input id="importJson" type="file" accept="application/json,.json">
+        </label>
+        <button id="clearAllButton" class="button danger" type="button" disabled>Esborrar-ho tot</button>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>Les dades es guarden només en aquest navegador fins que exportes el JSON.</p>
+  </footer>
+</body>
+</html>
