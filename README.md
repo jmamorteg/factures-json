@@ -19,6 +19,18 @@ Web app estàtica, pensada per a mòbil, per registrar factures emeses i rebudes
 3. Selecciona la branca `main` i la carpeta `/ (root)`.
 4. Desa els canvis.
 
+## Importar el JSON a Excel
+
+La carpeta [`importer`](./importer/) conté un importador local per a Windows i Excel d’escriptori. No necessita OneDrive, Power Automate ni macros dins del llibre.
+
+1. Descarrega el repositori amb **Code → Download ZIP**.
+2. Extreu la carpeta.
+3. Tanca el llibre de control fiscal.
+4. Executa `importer/Importar_factures.bat`.
+5. Selecciona el JSON i el llibre `.xlsx`.
+
+L’importador crea una còpia de seguretat, afegeix les files a `tblEntradaFactures`, conserva les fórmules de la taula i evita duplicats. Les files arriben amb `Estat_Fiscal = Pendent` i `Origen = JSON`.
+
 ## JSON exportat
 
 ```json
