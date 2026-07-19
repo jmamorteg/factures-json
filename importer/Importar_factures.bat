@@ -2,7 +2,7 @@
 setlocal
 cd /d "%~dp0"
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Importar_factures.ps1" %*
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Importar_factures_v2.ps1" %*
 set "EXIT_CODE=%ERRORLEVEL%"
 
 echo.
