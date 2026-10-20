@@ -252,7 +252,7 @@ function Set-CellText {
     }
 }
 
-function Set-CellValue {
+function Set-CellNumber {
     param(
         [object]$RowRange,
         [int]$Column,
@@ -270,8 +270,32 @@ function Set-CellValue {
             $cell.ClearContents() | Out-Null
         }
         else {
-            $cell.Value2 = $Value
+            $number = [double]$Value
+            $formulaText = $number.ToString("0.################", [Globalization.CultureInfo]::InvariantCulture)
+            $cell.Formula = $formulaText
         }
+    }
+    finally {
+        Release-ComObject $cell
+    }
+}
+
+function Set-CellDate {
+    param(
+        [object]$RowRange,
+        [int]$Column,
+        [DateTime]$Value
+    )
+
+    if ($Column -le 0) {
+        return
+    }
+
+    $cell = $null
+    try {
+        $cell = $RowRange.Cells.Item(1, $Column)
+        $cell.Formula = "=DATE($($Value.Year),$($Value.Month),$($Value.Day))"
+        $cell.NumberFormat = "dd/mm/yyyy"
     }
     finally {
         Release-ComObject $cell
@@ -459,7 +483,7 @@ try {
                     "yyyy-MM-dd",
                     [Globalization.CultureInfo]::InvariantCulture
                 )
-                Set-CellValue $rowRange $columns.Date $invoiceDate.ToOADate()
+                Set-CellDate $rowRange $columns.Date $invoiceDate
 
                 $numberText = ([string](Get-JsonProperty $invoice "num_factura")).Trim()
                 $aliasText = ([string](Get-JsonProperty $invoice "nom_alias")).Trim()
@@ -475,8 +499,8 @@ try {
                     Set-CellText $rowRange $columns.NifInput $nif.Trim().ToUpperInvariant()
                 }
 
-                Set-CellValue $rowRange $columns.VatRate (Convert-ToNumber (Get-JsonProperty $invoice "iva_pct"))
-                Set-CellValue $rowRange $columns.BaseAmount (Convert-ToNumber (Get-JsonProperty $invoice "bi"))
+                Set-CellNumber $rowRange $columns.VatRate (Convert-ToNumber (Get-JsonProperty $invoice "iva_pct"))
+                Set-CellNumber $rowRange $columns.BaseAmount (Convert-ToNumber (Get-JsonProperty $invoice "bi"))
 
                 $irpfOrAllocation = $null
                 if ($type -eq "Emesa") {
@@ -485,7 +509,7 @@ try {
                 else {
                     $irpfOrAllocation = Convert-ToNumber (Get-JsonProperty $invoice "afectacio_pct")
                 }
-                Set-CellValue $rowRange $columns.IrpfOrAllocation $irpfOrAllocation
+                Set-CellNumber $rowRange $columns.IrpfOrAllocation $irpfOrAllocation
 
                 $includeNifInNotes = ($null -eq $columns.NifInput)
                 Set-CellText $rowRange $columns.Notes (Build-Notes $invoice $includeNifInNotes)
